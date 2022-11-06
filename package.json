@@ -17,7 +17,7 @@
   "scripts": {
     "lint": "npm run lint:prettier && npm run lint:eslint",
     "lint:prettier": "prettier -c \"generated/**/*.json\"",
-    "lint:eslint": "eslint \"src/**/*.ts\"",
+    "lint:eslint": "eslint \"scripts/**/*.ts\"",
     "typecheck": "npx tsc --noEmit"
   },
   "devDependencies": {
