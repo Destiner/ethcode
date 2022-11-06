@@ -1,0 +1,163 @@
+{
+  "source": "pragma solidity ^0.4.24;\r\n\r\n// File: zos-lib/contracts/upgradeability/Proxy.sol\r\n\r\n/**\r\n * @title Proxy\r\n * @dev Implements delegation of calls to other contracts, with proper\r\n * forwarding of return values and bubbling of failures.\r\n * It defines a fallback function that delegates all calls to the address\r\n * returned by the abstract _implementation() internal function.\r\n */\r\ncontract Proxy {\r\n  /**\r\n   * @dev Fallback function.\r\n   * Implemented entirely in `_fallback`.\r\n   */\r\n  function () payable external {\r\n    _fallback();\r\n  }\r\n\r\n  /**\r\n   * @return The Address of the implementation.\r\n   */\r\n  function _implementation() internal view returns (address);\r\n\r\n  /**\r\n   * @dev Delegates execution to an implementation contract.\r\n   * This is a low level function that doesn't return to its internal call site.\r\n   * It will return to the external caller whatever the implementation returns.\r\n   * @param implementation Address to delegate.\r\n   */\r\n  function _delegate(address implementation) internal {\r\n    assembly {\r\n      // Copy msg.data. We take full control of memory in this inline assembly\r\n      // block because it will not return to Solidity code. We overwrite the\r\n      // Solidity scratch pad at memory position 0.\r\n      calldatacopy(0, 0, calldatasize)\r\n\r\n      // Call the implementation.\r\n      // out and outsize are 0 because we don't know the size yet.\r\n      let result := delegatecall(gas, implementation, 0, calldatasize, 0, 0)\r\n\r\n      // Copy the returned data.\r\n      returndatacopy(0, 0, returndatasize)\r\n\r\n      switch result\r\n      // delegatecall returns 0 on error.\r\n      case 0 { revert(0, returndatasize) }\r\n      default { return(0, returndatasize) }\r\n    }\r\n  }\r\n\r\n  /**\r\n   * @dev Function that is run as the first thing in the fallback function.\r\n   * Can be redefined in derived contracts to add functionality.\r\n   * Redefinitions must call super._willFallback().\r\n   */\r\n  function _willFallback() internal {\r\n  }\r\n\r\n  /**\r\n   * @dev fallback implementation.\r\n   * Extracted to enable manual triggering.\r\n   */\r\n  function _fallback() internal {\r\n    _willFallback();\r\n    _delegate(_implementation());\r\n  }\r\n}\r\n\r\n// File: openzeppelin-solidity/contracts/AddressUtils.sol\r\n\r\n/**\r\n * Utility library of inline functions on addresses\r\n */\r\nlibrary AddressUtils {\r\n\r\n  /**\r\n   * Returns whether the target address is a contract\r\n   * @dev This function will return false if invoked during the constructor of a contract,\r\n   * as the code is not actually created until after the constructor finishes.\r\n   * @param addr address to check\r\n   * @return whether the target address is a contract\r\n   */\r\n  function isContract(address addr) internal view returns (bool) {\r\n    uint256 size;\r\n    // XXX Currently there is no better way to check if there is a contract in an address\r\n    // than to check the size of the code at that address.\r\n    // See https://ethereum.stackexchange.com/a/14016/36603\r\n    // for more details about how this works.\r\n    // TODO Check this again before the Serenity release, because all addresses will be\r\n    // contracts then.\r\n    // solium-disable-next-line security/no-inline-assembly\r\n    assembly { size := extcodesize(addr) }\r\n    return size > 0;\r\n  }\r\n\r\n}\r\n\r\n// File: zos-lib/contracts/upgradeability/UpgradeabilityProxy.sol\r\n\r\n/**\r\n * @title UpgradeabilityProxy\r\n * @dev This contract implements a proxy that allows to change the\r\n * implementation address to which it will delegate.\r\n * Such a change is called an implementation upgrade.\r\n */\r\ncontract UpgradeabilityProxy is Proxy {\r\n  /**\r\n   * @dev Emitted when the implementation is upgraded.\r\n   * @param implementation Address of the new implementation.\r\n   */\r\n  event Upgraded(address implementation);\r\n\r\n  /**\r\n   * @dev Storage slot with the address of the current implementation.\r\n   * This is the keccak-256 hash of \"org.zeppelinos.proxy.implementation\", and is\r\n   * validated in the constructor.\r\n   */\r\n  bytes32 private constant IMPLEMENTATION_SLOT = 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3;\r\n\r\n  /**\r\n   * @dev Contract constructor.\r\n   * @param _implementation Address of the initial implementation.\r\n   */\r\n  constructor(address _implementation) public {\r\n    assert(IMPLEMENTATION_SLOT == keccak256(\"org.zeppelinos.proxy.implementation\"));\r\n\r\n    _setImplementation(_implementation);\r\n  }\r\n\r\n  /**\r\n   * @dev Returns the current implementation.\r\n   * @return Address of the current implementation\r\n   */\r\n  function _implementation() internal view returns (address impl) {\r\n    bytes32 slot = IMPLEMENTATION_SLOT;\r\n    assembly {\r\n      impl := sload(slot)\r\n    }\r\n  }\r\n\r\n  /**\r\n   * @dev Upgrades the proxy to a new implementation.\r\n   * @param newImplementation Address of the new implementation.\r\n   */\r\n  function _upgradeTo(address newImplementation) internal {\r\n    _setImplementation(newImplementation);\r\n    emit Upgraded(newImplementation);\r\n  }\r\n\r\n  /**\r\n   * @dev Sets the implementation address of the proxy.\r\n   * @param newImplementation Address of the new implementation.\r\n   */\r\n  function _setImplementation(address newImplementation) private {\r\n    require(AddressUtils.isContract(newImplementation), \"Cannot set a proxy implementation to a non-contract address\");\r\n\r\n    bytes32 slot = IMPLEMENTATION_SLOT;\r\n\r\n    assembly {\r\n      sstore(slot, newImplementation)\r\n    }\r\n  }\r\n}\r\n\r\n// File: zos-lib/contracts/upgradeability/AdminUpgradeabilityProxy.sol\r\n\r\n/**\r\n * @title AdminUpgradeabilityProxy\r\n * @dev This contract combines an upgradeability proxy with an authorization\r\n * mechanism for administrative tasks.\r\n * All external functions in this contract must be guarded by the\r\n * `ifAdmin` modifier. See ethereum/solidity#3864 for a Solidity\r\n * feature proposal that would enable this to be done automatically.\r\n */\r\ncontract AdminUpgradeabilityProxy is UpgradeabilityProxy {\r\n  /**\r\n   * @dev Emitted when the administration has been transferred.\r\n   * @param previousAdmin Address of the previous admin.\r\n   * @param newAdmin Address of the new admin.\r\n   */\r\n  event AdminChanged(address previousAdmin, address newAdmin);\r\n\r\n  /**\r\n   * @dev Storage slot with the admin of the contract.\r\n   * This is the keccak-256 hash of \"org.zeppelinos.proxy.admin\", and is\r\n   * validated in the constructor.\r\n   */\r\n  bytes32 private constant ADMIN_SLOT = 0x10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b;\r\n\r\n  /**\r\n   * @dev Modifier to check whether the `msg.sender` is the admin.\r\n   * If it is, it will run the function. Otherwise, it will delegate the call\r\n   * to the implementation.\r\n   */\r\n  modifier ifAdmin() {\r\n    if (msg.sender == _admin()) {\r\n      _;\r\n    } else {\r\n      _fallback();\r\n    }\r\n  }\r\n\r\n  /**\r\n   * Contract constructor.\r\n   * It sets the `msg.sender` as the proxy administrator.\r\n   * @param _implementation address of the initial implementation.\r\n   */\r\n  constructor(address _implementation) UpgradeabilityProxy(_implementation) public {\r\n    assert(ADMIN_SLOT == keccak256(\"org.zeppelinos.proxy.admin\"));\r\n\r\n    _setAdmin(msg.sender);\r\n  }\r\n\r\n  /**\r\n   * @return The address of the proxy admin.\r\n   */\r\n  function admin() external view ifAdmin returns (address) {\r\n    return _admin();\r\n  }\r\n\r\n  /**\r\n   * @return The address of the implementation.\r\n   */\r\n  function implementation() external view ifAdmin returns (address) {\r\n    return _implementation();\r\n  }\r\n\r\n  /**\r\n   * @dev Changes the admin of the proxy.\r\n   * Only the current admin can call this function.\r\n   * @param newAdmin Address to transfer proxy administration to.\r\n   */\r\n  function changeAdmin(address newAdmin) external ifAdmin {\r\n    require(newAdmin != address(0), \"Cannot change the admin of a proxy to the zero address\");\r\n    emit AdminChanged(_admin(), newAdmin);\r\n    _setAdmin(newAdmin);\r\n  }\r\n\r\n  /**\r\n   * @dev Upgrade the backing implementation of the proxy.\r\n   * Only the admin can call this function.\r\n   * @param newImplementation Address of the new implementation.\r\n   */\r\n  function upgradeTo(address newImplementation) external ifAdmin {\r\n    _upgradeTo(newImplementation);\r\n  }\r\n\r\n  /**\r\n   * @dev Upgrade the backing implementation of the proxy and call a function\r\n   * on the new implementation.\r\n   * This is useful to initialize the proxied contract.\r\n   * @param newImplementation Address of the new implementation.\r\n   * @param data Data to send as msg.data in the low level call.\r\n   * It should include the signature and the parameters of the function to be\r\n   * called, as described in\r\n   * https://solidity.readthedocs.io/en/develop/abi-spec.html#function-selector-and-argument-encoding.\r\n   */\r\n  function upgradeToAndCall(address newImplementation, bytes data) payable external ifAdmin {\r\n    _upgradeTo(newImplementation);\r\n    require(address(this).call.value(msg.value)(data));\r\n  }\r\n\r\n  /**\r\n   * @return The admin slot.\r\n   */\r\n  function _admin() internal view returns (address adm) {\r\n    bytes32 slot = ADMIN_SLOT;\r\n    assembly {\r\n      adm := sload(slot)\r\n    }\r\n  }\r\n\r\n  /**\r\n   * @dev Sets the address of the proxy admin.\r\n   * @param newAdmin Address of the new proxy admin.\r\n   */\r\n  function _setAdmin(address newAdmin) internal {\r\n    bytes32 slot = ADMIN_SLOT;\r\n\r\n    assembly {\r\n      sstore(slot, newAdmin)\r\n    }\r\n  }\r\n\r\n  /**\r\n   * @dev Only fall back when the sender is not the admin.\r\n   */\r\n  function _willFallback() internal {\r\n    require(msg.sender != _admin(), \"Cannot call fallback function from the proxy admin\");\r\n    super._willFallback();\r\n  }\r\n}\r\n\r\n// File: contracts/FiatTokenProxy.sol\r\n\r\n/**\r\n* Copyright CENTRE SECZ 2018\r\n*\r\n* Permission is hereby granted, free of charge, to any person obtaining a copy \r\n* of this software and associated documentation files (the \"Software\"), to deal \r\n* in the Software without restriction, including without limitation the rights \r\n* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell \r\n* copies of the Software, and to permit persons to whom the Software is furnished to \r\n* do so, subject to the following conditions:\r\n*\r\n* The above copyright notice and this permission notice shall be included in all \r\n* copies or substantial portions of the Software.\r\n*\r\n* THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR \r\n* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, \r\n* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE \r\n* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\r\n* WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN \r\n* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\r\n*/\r\n\r\npragma solidity ^0.4.24;\r\n\r\n\r\n/**\r\n * @title FiatTokenProxy\r\n * @dev This contract proxies FiatToken calls and enables FiatToken upgrades\r\n*/ \r\ncontract FiatTokenProxy is AdminUpgradeabilityProxy {\r\n    constructor(address _implementation) public AdminUpgradeabilityProxy(_implementation) {\r\n    }\r\n}",
+  "compiler": {
+    "version": "v0.4.24+commit.e67f0147",
+    "optimization": 0,
+    "runs": 200,
+    "constructor": "0x0000000000000000000000000882477e7895bdc5cea7cb1552ed914ab157fe56"
+  },
+  "abi": [
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "name",
+      "outputs": [{ "name": "", "type": "string" }],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        { "name": "guy", "type": "address" },
+        { "name": "wad", "type": "uint256" }
+      ],
+      "name": "approve",
+      "outputs": [{ "name": "", "type": "bool" }],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "totalSupply",
+      "outputs": [{ "name": "", "type": "uint256" }],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        { "name": "src", "type": "address" },
+        { "name": "dst", "type": "address" },
+        { "name": "wad", "type": "uint256" }
+      ],
+      "name": "transferFrom",
+      "outputs": [{ "name": "", "type": "bool" }],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [{ "name": "wad", "type": "uint256" }],
+      "name": "withdraw",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "decimals",
+      "outputs": [{ "name": "", "type": "uint8" }],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [{ "name": "", "type": "address" }],
+      "name": "balanceOf",
+      "outputs": [{ "name": "", "type": "uint256" }],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "symbol",
+      "outputs": [{ "name": "", "type": "string" }],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        { "name": "dst", "type": "address" },
+        { "name": "wad", "type": "uint256" }
+      ],
+      "name": "transfer",
+      "outputs": [{ "name": "", "type": "bool" }],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [],
+      "name": "deposit",
+      "outputs": [],
+      "payable": true,
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        { "name": "", "type": "address" },
+        { "name": "", "type": "address" }
+      ],
+      "name": "allowance",
+      "outputs": [{ "name": "", "type": "uint256" }],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    { "payable": true, "stateMutability": "payable", "type": "fallback" },
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "name": "src", "type": "address" },
+        { "indexed": true, "name": "guy", "type": "address" },
+        { "indexed": false, "name": "wad", "type": "uint256" }
+      ],
+      "name": "Approval",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "name": "src", "type": "address" },
+        { "indexed": true, "name": "dst", "type": "address" },
+        { "indexed": false, "name": "wad", "type": "uint256" }
+      ],
+      "name": "Transfer",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "name": "dst", "type": "address" },
+        { "indexed": false, "name": "wad", "type": "uint256" }
+      ],
+      "name": "Deposit",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "name": "src", "type": "address" },
+        { "indexed": false, "name": "wad", "type": "uint256" }
+      ],
+      "name": "Withdrawal",
+      "type": "event"
+    }
+  ],
+  "bytecode": "0x60606040526040805190810160405280600d81526020017f57726170706564204574686572000000000000000000000000000000000000008152506000908051906020019061004f9291906100c8565b506040805190810160405280600481526020017f57455448000000000000000000000000000000000000000000000000000000008152506001908051906020019061009b9291906100c8565b506012600260006101000a81548160ff021916908360ff16021790555034156100c357600080fd5b61016d565b828054600181600116156101000203166002900490600052602060002090601f016020900481019282601f1061010957805160ff1916838001178555610137565b82800160010185558215610137579182015b8281111561013657825182559160200191906001019061011b565b5b5090506101449190610148565b5090565b61016a91905b8082111561016657600081600090555060010161014e565b5090565b90565b610c348061017c6000396000f3006060604052600436106100af576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806306fdde03146100b9578063095ea7b31461014757806318160ddd146101a157806323b872dd146101ca5780632e1a7d4d14610243578063313ce5671461026657806370a082311461029557806395d89b41146102e2578063a9059cbb14610370578063d0e30db0146103ca578063dd62ed3e146103d4575b6100b7610440565b005b34156100c457600080fd5b6100cc6104dd565b6040518080602001828103825283818151815260200191508051906020019080838360005b8381101561010c5780820151818401526020810190506100f1565b50505050905090810190601f1680156101395780820380516001836020036101000a031916815260200191505b509250505060405180910390f35b341561015257600080fd5b610187600480803573ffffffffffffffffffffffffffffffffffffffff1690602001909190803590602001909190505061057b565b604051808215151515815260200191505060405180910390f35b34156101ac57600080fd5b6101b461066d565b6040518082815260200191505060405180910390f35b34156101d557600080fd5b610229600480803573ffffffffffffffffffffffffffffffffffffffff1690602001909190803573ffffffffffffffffffffffffffffffffffffffff1690602001909190803590602001909190505061068c565b604051808215151515815260200191505060405180910390f35b341561024e57600080fd5b61026460048080359060200190919050506109d9565b005b341561027157600080fd5b610279610b05565b604051808260ff1660ff16815260200191505060405180910390f35b34156102a057600080fd5b6102cc600480803573ffffffffffffffffffffffffffffffffffffffff16906020019091905050610b18565b6040518082815260200191505060405180910390f35b34156102ed57600080fd5b6102f5610b30565b6040518080602001828103825283818151815260200191508051906020019080838360005b8381101561033557808201518184015260208101905061031a565b50505050905090810190601f1680156103625780820380516001836020036101000a031916815260200191505b509250505060405180910390f35b341561037b57600080fd5b6103b0600480803573ffffffffffffffffffffffffffffffffffffffff16906020019091908035906020019091905050610bce565b604051808215151515815260200191505060405180910390f35b6103d2610440565b005b34156103df57600080fd5b61042a600480803573ffffffffffffffffffffffffffffffffffffffff1690602001909190803573ffffffffffffffffffffffffffffffffffffffff16906020019091905050610be3565b6040518082815260200191505060405180910390f35b34600360003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001600020600082825401925050819055503373ffffffffffffffffffffffffffffffffffffffff167fe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c346040518082815260200191505060405180910390a2565b60008054600181600116156101000203166002900480601f0160208091040260200160405190810160405280929190818152602001828054600181600116156101000203166002900480156105735780601f1061054857610100808354040283529160200191610573565b820191906000526020600020905b81548152906001019060200180831161055657829003601f168201915b505050505081565b600081600460003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060008573ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001600020819055508273ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff167f8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925846040518082815260200191505060405180910390a36001905092915050565b60003073ffffffffffffffffffffffffffffffffffffffff1631905090565b600081600360008673ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002054101515156106dc57600080fd5b3373ffffffffffffffffffffffffffffffffffffffff168473ffffffffffffffffffffffffffffffffffffffff16141580156107b457507fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff600460008673ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff1681526020019081526020016000205414155b156108cf5781600460008673ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001600020541015151561084457600080fd5b81600460008673ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001600020600082825403925050819055505b81600360008673ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff1681526020019081526020016000206000828254039250508190555081600360008573ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001600020600082825401925050819055508273ffffffffffffffffffffffffffffffffffffffff168473ffffffffffffffffffffffffffffffffffffffff167fddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef846040518082815260200191505060405180910390a3600190509392505050565b80600360003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff1681526020019081526020016000205410151515610a2757600080fd5b80600360003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001600020600082825403925050819055503373ffffffffffffffffffffffffffffffffffffffff166108fc829081150290604051600060405180830381858888f193505050501515610ab457600080fd5b3373ffffffffffffffffffffffffffffffffffffffff167f7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65826040518082815260200191505060405180910390a250565b600260009054906101000a900460ff1681565b60036020528060005260406000206000915090505481565b60018054600181600116156101000203166002900480601f016020809104026020016040519081016040528092919081815260200182805460018160011615610100020316600290048015610bc65780601f10610b9b57610100808354040283529160200191610bc6565b820191906000526020600020905b815481529060010190602001808311610ba957829003601f168201915b505050505081565b6000610bdb33848461068c565b905092915050565b60046020528160005260406000206020528060005260406000206000915091505054815600a165627a7a72305820deb4c2ccab3c2fdca32ab3f46728389c2fe2c165d5fafa07661e4e004f6c344a0029"
+}
