@@ -16,7 +16,7 @@
   "main": "lib/index.js",
   "scripts": {
     "lint": "npm run lint:prettier && npm run lint:eslint",
-    "lint:prettier": "prettier -c \"src/**/*.{json,ts}\"",
+    "lint:prettier": "prettier -c \"generated/**/*.json\"",
     "lint:eslint": "eslint \"src/**/*.ts\"",
     "typecheck": "npx tsc --noEmit"
   },
